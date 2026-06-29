@@ -15,8 +15,8 @@ def parse_args():
     p = argparse.ArgumentParser(description="Captura de cámara fisheye USB")
     p.add_argument("--device", type=int, default=0, help="Índice del dispositivo (default: 0)")
     p.add_argument("--fps", type=int, default=120, help="FPS objetivo (default: 120)")
-    p.add_argument("--width", type=int, default=1280, help="Ancho de captura (default: 1280)")
-    p.add_argument("--height", type=int, default=720, help="Alto de captura (default: 720)")
+    p.add_argument("--width", type=int, default=640, help="Ancho de captura (default: 640)")
+    p.add_argument("--height", type=int, default=480, help="Alto de captura (default: 480)")
     return p.parse_args()
 
 
@@ -27,10 +27,12 @@ def open_camera(device, fps, width, height):
         print("        Verifica que la cámara esté conectada: ls /dev/video*")
         sys.exit(1)
 
+    # MJPEG es necesario para alcanzar 120fps en USB — sin esto el formato RAW
+    # satura el ancho de banda y cae a ~8fps
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     cap.set(cv2.CAP_PROP_FPS, fps)
-    # Minimizar buffer interno para reducir latencia
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     real_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
