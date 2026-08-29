@@ -176,6 +176,11 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     cap.set(cv2.CAP_PROP_FPS, 30)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    # Intentar autofocus; si no lo soporta, no pasa nada
+    cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+    # Reducir exposición para evitar motion blur (valor negativo = manual en V4L2)
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)   # modo manual
+    cap.set(cv2.CAP_PROP_EXPOSURE, -6)       # ~1/64s; ajustar si queda oscuro
 
     if not cap.isOpened():
         print(f"[ERROR] No se pudo abrir /dev/video{args.device}")
@@ -215,6 +220,10 @@ def main():
 
         if map1 is not None:
             frame = cv2.remap(frame, map1, map2, cv2.INTER_LINEAR)
+
+        # Sharpening: resalta bordes para compensar blur de la lente
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], np.float32)
+        frame = cv2.filter2D(frame, -1, kernel)
 
         rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = face_mesh.process(rgb)
