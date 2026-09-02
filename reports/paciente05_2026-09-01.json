@@ -1,0 +1,18 @@
+{
+  "session": "paciente05",
+  "date": "2026-09-01",
+  "input": "fundus_processed/30_training_processed.png",
+  "mask": "masks/30_training_processed_mask.png",
+  "metrics": {
+    "mean_caliber_px": 4.8,
+    "caliber_relative_variability": 0.662,
+    "vascular_density": 0.429,
+    "tortuosity_index": 1.114,
+    "tortuosity_segments_used": 35
+  },
+  "risk_level": "MODERADO",
+  "risk_factors": [
+    "tortuosidad elevada"
+  ],
+  "disclaimer": "Score proxy calibrado contra el dataset DRIVE, no validado clínicamente. No incluye AVR real (requiere distinción arteria/vena, no disponible)."
+}

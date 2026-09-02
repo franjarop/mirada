@@ -17,22 +17,34 @@ def compute_fov_mask(frame: np.ndarray, thresh: int = 10):
     """
     Detecta el área visible de la retina (excluye el fondo negro del recorte circular).
     Retorna (mask, centro, radio). Si no se detecta un contorno claro, usa la imagen completa.
+
+    Usa Otsu en vez de un threshold fijo: en imágenes ya pasadas por CLAHE el fondo no queda
+    puro negro (ruido residual ~4-26), y con threshold=10 fijo el contorno se "fugaba" y
+    terminaba cubriendo casi toda la imagen (~98%) en vez de solo el círculo de la retina —
+    eso hacía que detect_optic_disc/detect_macula buscaran fuera del área real (ej. eligiendo
+    un reflejo cerca del borde como "disco"). El resultado también se fuerza a un círculo
+    macizo acotado a los límites de la imagen, en vez de un polígono de contorno que puede
+    fugarse si el ruido de fondo se conecta con la retina al dilatar/cerrar.
     """
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
     h, w = gray.shape[:2]
-    _, mask = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY)
+    otsu_val, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if otsu_val < thresh:  # Otsu degenerado (imagen casi sin fondo oscuro) -> usar threshold fijo
+        _, mask = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY)
     kernel = np.ones((15, 15), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return np.full((h, w), 255, np.uint8), (w // 2, h // 2), min(w, h) // 2
 
     largest = max(contours, key=cv2.contourArea)
-    clean_mask = np.zeros((h, w), np.uint8)
-    cv2.drawContours(clean_mask, [largest], -1, 255, -1)
     (cx, cy), radius = cv2.minEnclosingCircle(largest)
+    radius = min(radius, min(w, h) / 2)
+
+    clean_mask = np.zeros((h, w), np.uint8)
+    cv2.circle(clean_mask, (int(cx), int(cy)), int(radius), 255, -1)
     return clean_mask, (int(cx), int(cy)), int(radius)
 
 
@@ -62,13 +74,24 @@ def detect_optic_disc(frame: np.ndarray, fov_mask: np.ndarray = None, blur_ksize
         _, _, _, max_loc = cv2.minMaxLoc(cv2.bitwise_and(blurred, blurred, mask=fov_mask))
         return max_loc
 
+    # Centroide ponderado por intensidad (al cuadrado) dentro del blob más brillante, en vez de
+    # centroide uniforme: el blob puede ser asimétrico (ej. una extensión de brillo a lo largo de
+    # un vaso/reflejo saliendo del disco real), y un centroide uniforme se corre hacia esa cola en
+    # vez de quedarse sobre el núcleo real del disco. Ponderar por intensidad² tira el resultado
+    # hacia el punto más brillante real sin caer en el problema original de un solo píxel (ruidoso).
     largest = max(contours, key=cv2.contourArea)
-    M = cv2.moments(largest)
-    if M["m00"] == 0:
+    blob_mask = np.zeros_like(bright)
+    cv2.drawContours(blob_mask, [largest], -1, 255, -1)
+    ys, xs = np.where(blob_mask > 0)
+    if xs.size == 0:
         _, _, _, max_loc = cv2.minMaxLoc(cv2.bitwise_and(blurred, blurred, mask=fov_mask))
         return max_loc
 
-    return (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+    weights = blurred[ys, xs].astype(np.float64)
+    weights = (weights - weights.min() + 1) ** 2
+    cx = float(np.sum(xs * weights) / np.sum(weights))
+    cy = float(np.sum(ys * weights) / np.sum(weights))
+    return (int(cx), int(cy))
 
 
 def detect_macula(frame: np.ndarray, disc_pos=None, fov_mask: np.ndarray = None,
