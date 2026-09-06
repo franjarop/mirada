@@ -15,8 +15,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from fundus.color_balance import normalize_green_channel, gray_world_balance
-from fundus.roi_extractor import compute_fov_mask, detect_optic_disc, detect_macula, draw_roi
+from fundus.color_balance import (normalize_green_channel, gray_world_balance,
+                                   remove_reflections, apply_clahe_contrast)
+from fundus.roi_extractor import (compute_fov_mask, detect_optic_disc, detect_macula, draw_roi,
+                                   estimate_disc_radius)
+from fundus.disc_hybrid import detect_optic_disc_hybrid
 
 
 EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
@@ -36,46 +39,47 @@ def parse_args():
     return p.parse_args()
 
 
-def remove_reflections(frame: np.ndarray, thresh: int = 240) -> np.ndarray:
-    """Detecta brillos especulares (muy claros en los 3 canales) y los rellena por inpainting."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    _, mask = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY)
-    mask = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
-    if cv2.countNonZero(mask) == 0:
-        return frame
-    return cv2.inpaint(frame, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-
-
-def apply_clahe_contrast(frame: np.ndarray, clip_limit: float = 2.5,
-                          tile_size: int = 8) -> np.ndarray:
-    """Aumenta contraste global aplicando CLAHE al canal L (luminancia) en espacio LAB."""
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
-    l = clahe.apply(l)
-    return cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
-
-
 def preprocess_image(frame: np.ndarray) -> dict:
     """Corre el pipeline completo. Retorna dict con cada etapa y las posiciones detectadas."""
     balanced = gray_world_balance(frame)
     clean = remove_reflections(balanced)
+    # "clean" (sin CLAHE) es el dominio correcto para los modelos de vasos/A-V (vascular/), que
+    # se entrenaron sobre DRIVE/RITE crudos — el CLAHE exagera el contraste de la textura de
+    # fondo y hace que esos modelos sobre-detecten vasos donde no hay (~30% de la imagen en vez
+    # de ~9%). El disco/mácula sí usan clahe_img: la heurística y el modelo SMDG se calibraron
+    # sobre ese dominio.
     clahe_img = apply_clahe_contrast(clean)
     green_norm = normalize_green_channel(clean)
 
     fov_mask, fov_center, fov_radius = compute_fov_mask(clahe_img)
-    disc_pos = detect_optic_disc(clahe_img, fov_mask=fov_mask)
+    heuristic_disc_pos = detect_optic_disc(clahe_img, fov_mask=fov_mask)
+    hybrid = detect_optic_disc_hybrid(frame, clahe_img, heuristic_disc_pos)
+    disc_pos = hybrid["pos"]
     macula_pos = detect_macula(clahe_img, disc_pos=disc_pos, fov_mask=fov_mask,
                                 fov_center=fov_center, fov_radius=fov_radius)
-    annotated = draw_roi(clahe_img, disc_pos, macula_pos)
+    disc_radius = estimate_disc_radius(clahe_img, disc_pos, fov_mask=fov_mask)
+    # La mácula no se dibuja: por ahora no alimenta ningún cálculo aguas abajo (a diferencia del
+    # disco, que define la zona de medición del AVR), así que no aporta marcarla en la imagen.
+    # Sigue detectándose (macula_pos abajo) por si se necesita más adelante.
+    annotated = draw_roi(clahe_img, disc_pos, None, needs_review=hybrid["needs_review"],
+                          disc_radius=disc_radius)
 
     return {
         "original": frame,
+        "clean": clean,
         "clahe": clahe_img,
         "green": green_norm,
         "annotated": annotated,
         "disc_pos": disc_pos,
+        "disc_radius": disc_radius,
         "macula_pos": macula_pos,
+        "disc_needs_review": hybrid["needs_review"],
+        "disc_model_pos": hybrid["model_pos"],
+        "disc_conv_pos": hybrid["conv_pos"],
+        "disc_review_reason": hybrid["reason"],
+        "fov_mask": fov_mask,
+        "fov_center": fov_center,
+        "fov_radius": fov_radius,
     }
 
 
@@ -108,7 +112,10 @@ def process_one(path: Path, output_dir: Path, show: bool, save: bool, win_size=W
     result = preprocess_image(frame)
 
     if result["disc_pos"] is not None:
-        print(f"→ Disco óptico detectado en: {result['disc_pos']}")
+        print(f"→ Disco óptico detectado en: {result['disc_pos']} "
+              f"(modelo SMDG: {result['disc_model_pos']}, convergencia de vasos: {result['disc_conv_pos']})")
+        if result["disc_needs_review"]:
+            print(f"  [AVISO] {result['disc_review_reason']} — revisar manualmente.")
     else:
         print("→ Disco óptico: no detectado")
 

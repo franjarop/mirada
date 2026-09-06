@@ -11,9 +11,9 @@ Los umbrales del score están calibrados contra la distribución observada en la
 de DRIVE/RITE (ver notas abajo), NO contra un protocolo clínico estandarizado (Knudtson).
 Es un proxy relativo para uso del proyecto, no un diagnóstico.
 
-Uso:
-  python vascular/risk_score.py --input fundus_processed/21_training_processed.png \
-      --mask masks/21_training_processed_mask.png --session paciente01
+Uso (imagen ORIGINAL, no fundus_processed/ — ver nota de dominio en vascular/segmentation.py):
+  python vascular/risk_score.py --input fundus_images/dataset_drive/DRIVE/training/images/21_training.tif \
+      --mask masks/21_training_mask.png --session paciente01
 """
 
 import argparse
@@ -31,17 +31,23 @@ from vascular.avr import compute_avr
 from vascular.av_classifier import infer_av_probs
 from vascular.unet_model import UNet
 from vascular.overlay import side_by_side_av
-from fundus.roi_extractor import compute_fov_mask, detect_optic_disc
+from fundus.preprocess import preprocess_image
+from fundus.color_balance import gray_world_balance, remove_reflections
 
 # Umbrales calibrados contra las 20 imágenes de DRIVE/RITE (~percentil 75 de cada métrica,
-# o percentil 25 para AVR ya que valores más bajos = más riesgo). No son puntos de corte
-# clínicos estandarizados — son relativos a este dataset de referencia. La literatura general
-# de caliber vascular retinal (ej. estudios poblacionales tipo ARIC) asocia un AVR reducido
-# con mayor riesgo cardiovascular/hipertensivo, en la misma dirección que se usa acá.
-REL_VARIABILITY_HIGH = 0.68   # variabilidad de calibre (std/mean) por encima de esto: vaso irregular
-TORTUOSITY_HIGH = 1.10        # tortuosidad por encima de esto: vasos más curvados de lo típico
-DENSITY_LOW = 0.25            # densidad vascular por debajo de esto: posible rarefacción vascular
-AVR_LOW = 0.76                 # AVR por debajo de esto (~p25 sobre las 20 imágenes de referencia): arterias angostas
+# o percentil 25 para AVR/densidad ya que valores más bajos = más riesgo). No son puntos de
+# corte clínicos estandarizados — son relativos a este dataset de referencia. La literatura
+# general de calibre vascular retinal (ej. estudios poblacionales tipo ARIC) asocia un AVR
+# reducido con mayor riesgo cardiovascular/hipertensivo, en la misma dirección que se usa acá.
+#
+# Recalibrados en la sesión 2026-09-05 tras arreglar el bug de dominio del segmentador de vasos
+# (ver vascular/segmentation.py) — la máscara vieja sobre-detectaba ~30% de la imagen como vaso
+# en vez de ~9%, así que calibre/variabilidad/densidad/tortuosidad calculados sobre ella no
+# eran representativos. Valores viejos (con la máscara rota): 0.68 / 1.10 / 0.25 / 0.76.
+REL_VARIABILITY_HIGH = 0.45   # variabilidad de calibre (std/mean) por encima de esto: vaso irregular
+TORTUOSITY_HIGH = 1.09        # tortuosidad por encima de esto: vasos más curvados de lo típico
+DENSITY_LOW = 0.11            # densidad vascular por debajo de esto: posible rarefacción vascular
+AVR_LOW = 0.74                 # AVR por debajo de esto (~p25 sobre las 20 imágenes de referencia): arterias angostas
 
 DEFAULT_OUTPUT = "reports/"
 AV_MODEL_PATH = "models/av_classifier.pth"
@@ -49,7 +55,7 @@ AV_MODEL_PATH = "models/av_classifier.pth"
 
 def parse_args():
     p = argparse.ArgumentParser(description="Métricas vasculares y score de riesgo (commit 10)")
-    p.add_argument("--input", type=str, required=True, help="Imagen de retina pre-procesada")
+    p.add_argument("--input", type=str, required=True, help="Imagen ORIGINAL de retina (no fundus_processed/)")
     p.add_argument("--mask", type=str, required=True, help="Máscara de vasos (commit 9)")
     p.add_argument("--session", type=str, required=True, help="Identificador de sesión/paciente")
     p.add_argument("--output", type=str, default=DEFAULT_OUTPUT, help="Carpeta de reportes (default: reports/)")
@@ -58,20 +64,28 @@ def parse_args():
     return p.parse_args()
 
 
-def get_av_probs(image_bgr, av_model_path: Path):
-    """Retorna (p_artery, p_vein) del clasificador A/V, o (None, None) si no está entrenado."""
+def get_av_probs(frame_bgr, av_model_path: Path):
+    """
+    Retorna (p_artery, p_vein) del clasificador A/V, o (None, None) si no está entrenado.
+    frame_bgr: imagen ORIGINAL (no CLAHE) — av_classifier.py entrena sobre RITE crudo, igual
+    que unet_model.py sobre DRIVE crudo (ver nota de dominio en vascular/segmentation.py).
+    """
     if not av_model_path.exists():
         return None, None
     ckpt = torch.load(av_model_path, map_location="cpu", weights_only=False)
     model = UNet(out_ch=2, base=ckpt["base_channels"], depth=ckpt["depth"])
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
-    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    clean = remove_reflections(gray_world_balance(frame_bgr))
+    rgb = cv2.cvtColor(clean, cv2.COLOR_BGR2RGB)
     return infer_av_probs(model, rgb, ckpt["mean"], ckpt["std"], device="cpu")
 
 
-def compute_metrics(image_bgr, vessel_mask, av_model_path: Path, av_probs=None) -> dict:
-    fov_mask, _, _ = compute_fov_mask(image_bgr)
+def compute_metrics(frame, vessel_mask, av_model_path: Path, av_probs=None) -> dict:
+    """frame: imagen ORIGINAL (no CLAHE) de fondo de ojo. El disco se detecta acá mismo con el
+    esquema híbrido de fundus/preprocess.py (heurística + modelo SMDG) en vez de recalcularlo."""
+    result = preprocess_image(frame)
+    fov_mask = result["fov_mask"]
     cs = caliber_stats(vessel_mask, fov_mask=fov_mask)
     ti = tortuosity_index(vessel_mask)
     rel_variability = cs["std_caliber_px"] / cs["mean_caliber_px"] if cs["mean_caliber_px"] else 0.0
@@ -82,13 +96,14 @@ def compute_metrics(image_bgr, vessel_mask, av_model_path: Path, av_probs=None) 
         "vascular_density": round(cs["vascular_density"], 3),
         "tortuosity_index": round(ti["tortuosity_index"], 3),
         "tortuosity_segments_used": ti["segments_used"],
+        "disc_needs_review": result["disc_needs_review"],
         "avr": None,
         "avr_unavailable_reason": None,
     }
 
-    disc_pos = detect_optic_disc(image_bgr, fov_mask=fov_mask)
+    disc_pos = result["disc_pos"]
     if av_probs is None:
-        av_probs = get_av_probs(image_bgr, av_model_path)
+        av_probs = get_av_probs(frame, av_model_path)
     p_artery, p_vein = av_probs
 
     if disc_pos is None:
@@ -96,7 +111,7 @@ def compute_metrics(image_bgr, vessel_mask, av_model_path: Path, av_probs=None) 
     elif p_artery is None:
         metrics["avr_unavailable_reason"] = f"falta entrenar el modelo ({av_model_path})"
     else:
-        avr_result = compute_avr(image_bgr, vessel_mask, p_artery, p_vein, disc_pos, fov_mask=fov_mask)
+        avr_result = compute_avr(result["clahe"], vessel_mask, p_artery, p_vein, disc_pos, fov_mask=fov_mask)
         metrics["avr"] = avr_result["avr"]
         metrics["avr_detail"] = avr_result
 

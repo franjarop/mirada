@@ -26,3 +26,23 @@ def gray_world_balance(frame: np.ndarray) -> np.ndarray:
     r *= avg / (r.mean() + 1e-6)
     balanced = cv2.merge([b, g, r])
     return np.clip(balanced, 0, 255).astype(np.uint8)
+
+
+def remove_reflections(frame: np.ndarray, thresh: int = 240) -> np.ndarray:
+    """Detecta brillos especulares (muy claros en los 3 canales) y los rellena por inpainting."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY)
+    mask = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
+    if cv2.countNonZero(mask) == 0:
+        return frame
+    return cv2.inpaint(frame, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+
+
+def apply_clahe_contrast(frame: np.ndarray, clip_limit: float = 2.5,
+                          tile_size: int = 8) -> np.ndarray:
+    """Aumenta contraste global aplicando CLAHE al canal L (luminancia) en espacio LAB."""
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
+    l = clahe.apply(l)
+    return cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)

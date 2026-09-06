@@ -1,11 +1,18 @@
 """
-Commit 9 — Segmentación de vasos sobre una imagen de fondo de ojo pre-procesada.
+Commit 9 — Segmentación de vasos sobre una imagen de fondo de ojo.
 
-Uso:
-  python vascular/segmentation.py --input fundus_processed/21_training_processed.png --show
+Uso (imagen original, SIN pasar por fundus_processed/ — ver nota de dominio abajo):
+  python vascular/segmentation.py --input fundus_images/dataset_drive/DRIVE/training/images/21_training.tif --show
 
 Nota: el checkpoint por defecto (models/unet_drive.pth) corre en PyTorch/CPU.
 La conversión a TensorRT queda para el commit 12 — ver vascular/unet_model.py --convert.
+
+Nota de dominio (encontrado en la sesión del esquema híbrido de disco, 2026-09-05): el modelo
+se entrenó sobre imágenes DRIVE crudas, sin el CLAHE que aplica fundus/preprocess.py. Si se le
+da una imagen ya pasada por CLAHE (ej. fundus_processed/*.png), sobre-detecta vasos por todos
+lados (~30% de la imagen en vez de ~9%) porque el contraste de textura exagerado por CLAHE se
+parece a un borde de vaso. `segment()` por eso aplica acá mismo el balance de blancos +
+eliminación de reflejos (mismo primer tramo que preprocess.py, sin el CLAHE) antes de inferir.
 """
 
 import argparse
@@ -20,6 +27,7 @@ import torch
 from vascular.unet_model import UNet, infer_full_image
 from vascular.overlay import side_by_side
 from fundus.roi_extractor import compute_fov_mask
+from fundus.color_balance import gray_world_balance, remove_reflections
 
 DEFAULT_MODEL = "models/unet_drive.pth"
 DEFAULT_OUTPUT = "masks/"
@@ -28,7 +36,7 @@ WIN_SIZE = (480, 360)
 
 def parse_args():
     p = argparse.ArgumentParser(description="Segmentación de vasos retinales con U-Net")
-    p.add_argument("--input", type=str, required=True, help="Imagen de retina pre-procesada")
+    p.add_argument("--input", type=str, required=True, help="Imagen ORIGINAL de retina (no fundus_processed/)")
     p.add_argument("--model", type=str, default=DEFAULT_MODEL, help="Checkpoint .pth (default: models/unet_drive.pth)")
     p.add_argument("--output", type=str, default=DEFAULT_OUTPUT, help="Carpeta de salida para la máscara")
     p.add_argument("--threshold", type=float, default=0.5, help="Umbral de probabilidad para binarizar (default: 0.5)")
@@ -47,11 +55,13 @@ def load_model(model_path: Path):
 
 
 def segment(model, mean, std, image_bgr: np.ndarray, threshold: float):
-    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    """image_bgr: imagen ORIGINAL (no pasada por CLAHE) — ver nota de dominio arriba."""
+    clean = remove_reflections(gray_world_balance(image_bgr))
+    rgb = cv2.cvtColor(clean, cv2.COLOR_BGR2RGB)
     t0 = time.time()
     prob = infer_full_image(model, rgb, mean, std, device="cpu")
     dt_ms = (time.time() - t0) * 1000
-    fov_mask, _, _ = compute_fov_mask(image_bgr)
+    fov_mask, _, _ = compute_fov_mask(clean)
     fov_mask = cv2.erode(fov_mask, np.ones((15, 15), np.uint8))  # descarta el borde del recorte circular (falsos positivos por contraste alto)
     mask = (prob > threshold) & (fov_mask > 0)
     return mask, dt_ms

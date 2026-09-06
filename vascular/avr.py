@@ -13,38 +13,11 @@ razonable pero no reproduce el estándar clínico exacto — ver disclaimer en r
 """
 
 import numpy as np
-import cv2
 
 from vascular.caliber import compute_skeleton, caliber_map
+from fundus.roi_extractor import estimate_disc_radius
 
 ARTERY, VEIN = 0, 1
-
-
-def estimate_disc_radius(image_bgr: np.ndarray, disc_pos, fov_mask: np.ndarray = None,
-                          blur_ksize: int = 51) -> float:
-    """
-    Radio equivalente del disco óptico (sqrt(área/pi) del blob más brillante), usado para
-    definir la zona de medición del AVR. Recalcula el mismo blob que
-    fundus.roi_extractor.detect_optic_disc, pero necesita el área además de la posición.
-    """
-    green = image_bgr[:, :, 1]
-    blurred = cv2.GaussianBlur(green, (blur_ksize, blur_ksize), 0)
-    if fov_mask is None:
-        fov_mask = np.full(green.shape[:2], 255, np.uint8)
-
-    valid = blurred[fov_mask > 0]
-    if valid.size == 0:
-        return 30.0  # fallback razonable para imágenes ~565x584
-
-    thresh_val = np.percentile(valid, 98)
-    bright = ((blurred >= thresh_val) & (fov_mask > 0)).astype(np.uint8) * 255
-    contours, _ = cv2.findContours(bright, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return 30.0
-
-    largest = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(largest)
-    return max(float(np.sqrt(area / np.pi)), 10.0)
 
 
 def measurement_zone_mask(shape, disc_pos, disc_radius: float,

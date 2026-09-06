@@ -37,8 +37,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from fundus.color_balance import gray_world_balance
-from fundus.preprocess import remove_reflections, apply_clahe_contrast
+from fundus.color_balance import gray_world_balance, remove_reflections, apply_clahe_contrast
 
 DEFAULT_DATA_DIR = "fundus_images/dataset_smdg"
 DEFAULT_OUTPUT = "models/disc_smdg.pth"
@@ -240,9 +239,118 @@ def train(args):
     print(f"[OK] Checkpoint final en: {output_path}")
 
 
+def list_manual_samples(csv_path: Path):
+    """Lee las anotaciones de fundus/annotate_disc.py: (ruta imagen ORIGINAL, (disc_x, disc_y))
+    en el dominio CLAHE (mismo que apply_domain_transform produce)."""
+    samples = []
+    with open(csv_path, newline="") as f:
+        for row in csv.DictReader(f):
+            samples.append((Path(row["image"]), (int(row["disc_x"]), int(row["disc_y"]))))
+    return samples
+
+
+class ManualDiscDataset(torch.utils.data.Dataset):
+    """Ejemplos anotados a mano (fundus/annotate_disc.py) — casos donde el esquema híbrido
+    (fundus/disc_hybrid.py) no acertaba y se corrigieron con un clic. `repeat` los repite varias
+    veces por época para que no se diluyan frente a los ejemplos de SMDG original al mezclarlos
+    en finetune()."""
+
+    def __init__(self, samples, img_size=IMG_SIZE, repeat=20):
+        self.img_size = img_size
+        self.repeat = repeat
+        self.images, self.coords = [], []
+        for img_path, (cx, cy) in samples:
+            frame = cv2.imread(str(img_path))
+            if frame is None:
+                print(f"[WARN] No se pudo leer: {img_path}")
+                continue
+            domain_img = apply_domain_transform(frame)
+            h, w = domain_img.shape[:2]
+            img_rgb = cv2.cvtColor(domain_img, cv2.COLOR_BGR2RGB)
+            img_rgb = cv2.resize(img_rgb, (img_size, img_size))
+            self.images.append(img_rgb.astype(np.uint8))
+            self.coords.append(np.array([cx / w, cy / h], dtype=np.float32))
+
+    def __len__(self):
+        return len(self.images) * self.repeat
+
+    def __getitem__(self, idx):
+        idx = idx % len(self.images)
+        arr = self.images[idx].astype(np.float32) / 255.0
+        coords = self.coords[idx].copy()
+        if random.random() < 0.5:
+            arr = arr[:, ::-1].copy()
+            coords[0] = 1 - coords[0]
+        if random.random() < 0.5:
+            arr = arr[::-1, :].copy()
+            coords[1] = 1 - coords[1]
+        img_t = torch.from_numpy(arr.transpose(2, 0, 1)).float()
+        return img_t, torch.from_numpy(coords)
+
+
+def finetune(args):
+    """Ajusta un checkpoint ya entrenado con las anotaciones manuales, mezcladas con una muestra
+    de SMDG original para no perder lo aprendido antes (catastrophic forgetting) — con solo un
+    puñado de imágenes anotadas a mano, entrenar SOLO sobre ellas sobreajustaría en 1-2 épocas."""
+    manual_path = Path(args.manual_csv)
+    if not manual_path.exists():
+        print(f"[ERROR] No existe {manual_path} — anotá primero con fundus/annotate_disc.py")
+        return
+    manual_samples = list_manual_samples(manual_path)
+    if not manual_samples:
+        print(f"[ERROR] {manual_path} está vacío")
+        return
+    print(f"[INFO] {len(manual_samples)} imágenes anotadas a mano para fine-tuning")
+
+    init_ckpt = torch.load(args.init_checkpoint, map_location="cpu", weights_only=False)
+    model = DiscNet()
+    model.load_state_dict(init_ckpt["state_dict"])
+
+    manual_dataset = ManualDiscDataset(manual_samples, img_size=args.img_size, repeat=args.manual_repeat)
+
+    base_samples = list_smdg_samples(Path(args.data))
+    random.Random(0).shuffle(base_samples)
+    base_samples = base_samples[:args.base_samples]
+    print(f"[INFO] Mezclando con {len(base_samples)} imágenes de SMDG original")
+    base_dataset = DiscDataset(base_samples, img_size=args.img_size, augment=True)
+
+    combined = torch.utils.data.ConcatDataset([manual_dataset, base_dataset])
+    loader = torch.utils.data.DataLoader(combined, batch_size=args.batch_size, shuffle=True, num_workers=0)
+
+    device = "cpu"
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for epoch in range(1, args.epochs + 1):
+        model.train()
+        t0 = time.time()
+        running_loss = 0.0
+        for x, y in tqdm(loader, desc=f"Fine-tune {epoch}/{args.epochs}", leave=False):
+            optimizer.zero_grad()
+            pred = model(x)
+            loss = F.mse_loss(pred, y)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item() * x.size(0)
+        dt = time.time() - t0
+        print(f"→ Epoch {epoch}/{args.epochs} — loss: {running_loss / len(combined):.5f} | {dt:.1f}s")
+
+    torch.save({
+        "state_dict": model.state_dict(),
+        "img_size": args.img_size,
+        "orig_size": ORIG_SIZE,
+        "finetuned_from": str(args.init_checkpoint),
+        "manual_samples": len(manual_samples),
+    }, output_path)
+    print(f"\n[OK] Modelo ajustado guardado en: {output_path}")
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Localización de disco óptico entrenada (SMDG)")
     p.add_argument("--train", action="store_true")
+    p.add_argument("--finetune", action="store_true",
+                    help="Ajusta un checkpoint existente con anotaciones manuales (fundus/annotate_disc.py)")
     p.add_argument("--data", type=str, default=DEFAULT_DATA_DIR)
     p.add_argument("--output", type=str, default=DEFAULT_OUTPUT)
     p.add_argument("--epochs", type=int, default=15)
@@ -250,15 +358,25 @@ def parse_args():
     p.add_argument("--img-size", type=int, default=IMG_SIZE)
     p.add_argument("--val-images", type=int, default=300)
     p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--manual-csv", type=str, default="fundus_annotations/disc_manual.csv",
+                    help="CSV de fundus/annotate_disc.py (solo --finetune)")
+    p.add_argument("--init-checkpoint", type=str, default="models/disc_smdg_clahe.pth",
+                    help="Checkpoint de partida para el fine-tuning (solo --finetune)")
+    p.add_argument("--manual-repeat", type=int, default=20,
+                    help="Veces que se repite cada imagen anotada a mano por época (solo --finetune)")
+    p.add_argument("--base-samples", type=int, default=300,
+                    help="Cuántas imágenes de SMDG original mezclar para no olvidar lo aprendido (solo --finetune)")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    if args.train:
+    if args.finetune:
+        finetune(args)
+    elif args.train:
         train(args)
     else:
-        print("[ERROR] Especificá --train")
+        print("[ERROR] Especificá --train o --finetune")
 
 
 if __name__ == "__main__":

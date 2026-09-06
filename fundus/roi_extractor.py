@@ -94,6 +94,52 @@ def detect_optic_disc(frame: np.ndarray, fov_mask: np.ndarray = None, blur_ksize
     return (int(cx), int(cy))
 
 
+def estimate_disc_radius(frame: np.ndarray, disc_pos, fov_mask: np.ndarray = None,
+                          blur_ksize: int = 51, search_radius: float = 80.0) -> float:
+    """
+    Radio real del disco óptico (sqrt(área/pi) del blob de brillo que contiene disc_pos, o el
+    más cercano dentro de search_radius). A diferencia de una búsqueda independiente del blob
+    más brillante de toda la imagen (como hacía antes vascular/avr.py, sin usar disc_pos para
+    nada), esto ata el radio al mismo disco que ya se decidió dibujar/medir — si disc_pos vino
+    del esquema híbrido (fundus/disc_hybrid.py) por convergencia de vasos en vez de brillo, el
+    radio igual corresponde a ESE disco y no a otro blob brillante (ej. un reflejo) que quedó
+    más grande o más brillante en otra parte de la imagen.
+    """
+    if disc_pos is None:
+        return 30.0  # fallback razonable para imágenes ~565x584
+
+    green = frame[:, :, 1] if frame.ndim == 3 else frame
+    blurred = cv2.GaussianBlur(green, (blur_ksize, blur_ksize), 0)
+    h, w = green.shape[:2]
+    if fov_mask is None:
+        fov_mask = np.full((h, w), 255, np.uint8)
+
+    valid = blurred[fov_mask > 0]
+    if valid.size == 0:
+        return 30.0
+
+    thresh_val = np.percentile(valid, 90)  # más laxo que el 98 de detect_optic_disc: acá interesa
+                                            # el contorno completo del disco, no solo su núcleo
+    bright = ((blurred >= thresh_val) & (fov_mask > 0)).astype(np.uint8) * 255
+    contours, _ = cv2.findContours(bright, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return 30.0
+
+    point = (float(disc_pos[0]), float(disc_pos[1]))
+    best, best_dist = None, None
+    for c in contours:
+        signed = cv2.pointPolygonTest(c, point, True)
+        dist = 0.0 if signed >= 0 else -signed  # 0 si disc_pos cae adentro del contorno
+        if best is None or dist < best_dist:
+            best, best_dist = c, dist
+
+    if best is None or best_dist > search_radius:
+        return 30.0
+
+    area = cv2.contourArea(best)
+    return max(float(np.sqrt(area / np.pi)), 10.0)
+
+
 def detect_macula(frame: np.ndarray, disc_pos=None, fov_mask: np.ndarray = None,
                    fov_center=None, fov_radius: int = None, blur_ksize: int = 51):
     """Retorna (x, y) de la mácula, o None si no se detecta."""
@@ -131,13 +177,18 @@ def detect_macula(frame: np.ndarray, disc_pos=None, fov_mask: np.ndarray = None,
     return (int(xs[idx]), int(ys[idx]))
 
 
-def draw_roi(frame: np.ndarray, disc_pos=None, macula_pos=None) -> np.ndarray:
-    """Dibuja círculos: amarillo = disco óptico, azul = mácula."""
+def draw_roi(frame: np.ndarray, disc_pos=None, macula_pos=None, needs_review: bool = False,
+             disc_radius: float = 25) -> np.ndarray:
+    """Dibuja círculos: amarillo = disco óptico (rojo si el esquema híbrido marcó revisión), azul = mácula.
+    disc_radius: tamaño real del círculo del disco (ver roi_extractor.estimate_disc_radius) —
+    default 25 solo para llamadas viejas que no lo pasan."""
     out = frame.copy()
     if disc_pos is not None:
-        cv2.circle(out, disc_pos, 25, (0, 255, 255), 2)
-        cv2.putText(out, "disco", (disc_pos[0] - 20, disc_pos[1] - 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        color = (0, 0, 255) if needs_review else (0, 255, 255)
+        cv2.circle(out, disc_pos, int(round(disc_radius)), color, 2)
+        label = "disco (revisar)" if needs_review else "disco"
+        cv2.putText(out, label, (disc_pos[0] - 20, disc_pos[1] - 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
     if macula_pos is not None:
         cv2.circle(out, macula_pos, 20, (255, 128, 0), 2)
         cv2.putText(out, "macula", (macula_pos[0] - 25, macula_pos[1] - 25),
