@@ -80,23 +80,26 @@ def check_scipy():
         return False
 
 
-def check_mediapipe():
+def check_skimage():
     try:
-        import mediapipe as mp
-        ok("MediaPipe", f"v{mp.__version__}")
+        import skimage
+        ok("scikit-image", f"v{skimage.__version__}")
         return True
     except ImportError:
-        fail("MediaPipe", "pip install mediapipe")
+        fail("scikit-image", "pip install scikit-image")
         return False
 
 
-def check_pyqt6():
+def check_torch():
     try:
-        from PyQt6.QtCore import QT_VERSION_STR
-        ok("PyQt6", f"v{QT_VERSION_STR}")
+        import torch
+        if torch.cuda.is_available():
+            ok("PyTorch + CUDA", f"v{torch.__version__}")
+        else:
+            warn("PyTorch (sin CUDA)", f"v{torch.__version__} — la U-Net corre en CPU (más lento)")
         return True
     except ImportError:
-        fail("PyQt6", "pip install PyQt6  (necesario para el dashboard, commit 11)")
+        fail("PyTorch", "instalar torch precompilado para JetPack (ver install.sh)")
         return False
 
 
@@ -167,22 +170,18 @@ def main():
     r_opencv  = check_opencv()
     print()
 
-    print(f"  {BOLD}Dependencias Python — módulos avanzados:{RESET}")
-    r_mp    = check_mediapipe()
-    r_pyqt  = check_pyqt6()
+    print(f"  {BOLD}Dependencias Python — fondo de ojo y vasos:{RESET}")
+    r_skimage = check_skimage()
+    r_torch   = check_torch()
     print()
 
     # Resultado final
     print(f"{BOLD}{'─'*55}{RESET}")
 
-    core_ok = all([r_python, r_numpy, r_scipy, r_opencv])
+    core_ok = all([r_python, r_numpy, r_scipy, r_opencv, r_skimage, r_torch])
 
     if core_ok:
-        print(f"  {GREEN}{BOLD}ENTORNO LISTO — Puedes continuar al Commit 1{RESET}")
-        if not r_mp:
-            print(f"  {YELLOW}(MediaPipe hace falta en el Commit 4 — instálalo antes){RESET}")
-        if not r_pyqt:
-            print(f"  {YELLOW}(PyQt6 hace falta en el Commit 11 — instálalo antes){RESET}")
+        print(f"  {GREEN}{BOLD}ENTORNO LISTO{RESET}")
     else:
         print(f"  {RED}{BOLD}ENTORNO INCOMPLETO — Instala los paquetes marcados con ✗{RESET}")
         print(f"  {YELLOW}Ejecuta:  bash install.sh{RESET}")

@@ -87,12 +87,7 @@ else
     warn "Para soporte CUDA nativo en Jetson, compila OpenCV desde fuentes"
 fi
 
-# ── 7. MediaPipe ─────────────────────────────────────────────────────────────
-info "Instalando MediaPipe (necesario para Commit 4)..."
-pip3 install mediapipe --quiet
-ok "MediaPipe instalado"
-
-# ── 8. Resto de dependencias del proyecto ────────────────────────────────────
+# ── 7. Resto de dependencias del proyecto ────────────────────────────────────
 info "Instalando resto de dependencias (Pillow, scikit-image, matplotlib...)..."
 pip3 install \
     Pillow \
@@ -100,15 +95,10 @@ pip3 install \
     matplotlib \
     tqdm \
     PyYAML \
-    reportlab \
     --quiet
 ok "Dependencias auxiliares instaladas"
 
-# ── 9. PyQt6 ─────────────────────────────────────────────────────────────────
-info "Instalando PyQt6 (necesario para Commit 11 — dashboard)..."
-pip3 install PyQt6 --quiet && ok "PyQt6 instalado" || warn "PyQt6 falló — intenta manualmente: pip3 install PyQt6"
-
-# ── 10. Verificación final ───────────────────────────────────────────────────
+# ── 8. Verificación final ───────────────────────────────────────────────────
 echo
 echo -e "${BOLD}──────────────────────────────────────────${NC}"
 info "Ejecutando verificación del entorno..."

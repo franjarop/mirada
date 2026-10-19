@@ -6,5 +6,5 @@
 cd "$(dirname "$0")"
 IMG="${1:-21_training}"
 PYTHONPATH="$(pwd)" python3 vascular/segmentation.py \
-  --input "fundus_processed/${IMG}_processed.png" \
+  --input "fundus_images/dataset_drive/DRIVE/training/images/${IMG}.tif" \
   --show --save

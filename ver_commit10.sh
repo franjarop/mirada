@@ -7,6 +7,6 @@ cd "$(dirname "$0")"
 IMG="${1:-21_training}"
 SESSION="${2:-demo}"
 PYTHONPATH="$(pwd)" python3 vascular/risk_score.py \
-  --input "fundus_processed/${IMG}_processed.png" \
-  --mask "masks/${IMG}_processed_mask.png" \
+  --input "fundus_images/dataset_drive/DRIVE/training/images/${IMG}.tif" \
+  --mask "masks/${IMG}_mask.png" \
   --session "$SESSION" --show

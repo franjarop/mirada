@@ -21,17 +21,11 @@ MD_FILE     = os.path.join(os.path.dirname(__file__), "mirada_proyecto.md")
 
 COMMITS = [
     (0,  "Entorno",      "Verificación del entorno Jetson"),
-    (1,  "Cámara",       "Captura básica de cámara fisheye"),
-    (2,  "Cámara",       "Corrección de distorsión fisheye"),
-    (3,  "Euler",        "Pipeline de magnificación euleriana"),
-    (4,  "Euler",        "Detección de ROI ocular para rPPG"),
-    (5,  "Pupilometría", "Detección de pupila y diámetro"),
-    (6,  "Pupilometría", "Anisocoria y registro CSV"),
     (7,  "Fondo de ojo", "Adquisición con lente 20D/28D"),
     (8,  "Fondo de ojo", "Pre-procesamiento de imagen retinal"),
     (9,  "Vascular",     "Segmentación de vasos con U-Net"),
     (10, "Vascular",     "Métricas AVR, tortuosidad y reporte"),
-    (11, "Integración",  "Dashboard unificado en tiempo real"),
+    (11, "Integración",  "Dashboard de fondo de ojo (pospuesto)"),
     (12, "Optimización", "Optimización para Jetson Orin Nano"),
 ]
 
@@ -257,7 +251,7 @@ def mostrar_commit(num):
 
 def completar_commit(num):
     if not any(n == num for n, _, _ in COMMITS):
-        print(f"\n{RE}  El commit {num} no existe. Los commits van del 0 al 12.{R}\n")
+        print(f"\n{RE}  El commit {num} no existe. Commits disponibles: 0, 7–12.{R}\n")
         return
 
     estado = cargar_estado()
@@ -301,7 +295,7 @@ def mostrar_siguiente():
 
 def menu_interactivo():
     titulo("Mirada — Guía Interactiva", CY)
-    print(f"  {DIM}Sistema de diagnóstico ocular con IA en Jetson Orin Nano{R}\n")
+    print(f"  {DIM}Procesamiento de imágenes de fondo de ojo en Jetson Orin Nano{R}\n")
 
     estado = cargar_estado()
     completados = estado.get("completados", [])
@@ -330,7 +324,7 @@ def menu_interactivo():
         mostrar_siguiente()
 
     elif opcion == "3":
-        print(f"\n  {DIM}Commits disponibles: 0 al 12{R}")
+        print(f"\n  {DIM}Commits disponibles: 0, 7–12{R}")
         try:
             num = int(input(f"  {YE}Número de commit: {R}").strip())
             mostrar_commit(num)

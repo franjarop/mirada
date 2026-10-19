@@ -7,7 +7,6 @@ scipy>=1.8.0
 opencv-python>=4.8.0
 
 # ─── Visión e IA ──────────────────────────────────────────
-mediapipe>=0.10.0          # Commit 4: detección facial y ROI ocular
 Pillow>=9.0.0              # Manipulación de imágenes
 scikit-image>=0.19.0       # Procesamiento retinal (commit 8)
 
@@ -16,16 +15,7 @@ scikit-image>=0.19.0       # Procesamiento retinal (commit 8)
 # torch>=2.0.0
 # onnxruntime-gpu>=1.16.0  # Para inferencia TensorRT
 
-# ─── GUI (commit 11) ──────────────────────────────────────
-PyQt6>=6.4.0
-
-# ─── Reportes (commit 11) ─────────────────────────────────
-reportlab>=4.0.0           # Generación de PDF
-
 # ─── Utilidades ───────────────────────────────────────────
 PyYAML>=6.0
 matplotlib>=3.5.0
 tqdm>=4.64.0
-
-# ─── GPIO Jetson (commits con hardware externo) ───────────
-# Jetson.GPIO>=2.1.0       # Descomentar si se usa GPIO
