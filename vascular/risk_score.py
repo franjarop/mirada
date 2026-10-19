@@ -33,6 +33,7 @@ from vascular.unet_model import UNet
 from vascular.overlay import side_by_side_av
 from fundus.preprocess import preprocess_image
 from fundus.color_balance import gray_world_balance, remove_reflections
+from fundus.storage import load_image, dicom_metadata
 
 # Umbrales calibrados contra las 20 imágenes de DRIVE/RITE (~percentil 75 de cada métrica,
 # o percentil 25 para AVR/densidad ya que valores más bajos = más riesgo). No son puntos de
@@ -151,7 +152,7 @@ def main():
         print("[INFO] Generala primero con: python vascular/segmentation.py --input ... --save")
         sys.exit(1)
 
-    image = cv2.imread(str(input_path))
+    image = load_image(input_path)
     mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
     if image is None or mask is None:
         print("[ERROR] No se pudo leer la imagen o la máscara")
@@ -188,6 +189,7 @@ def main():
         "date": date.today().isoformat(),
         "input": str(input_path),
         "mask": str(mask_path),
+        "dicom": dicom_metadata(input_path) or None,
         "metrics": metrics,
         "risk_level": risk_level,
         "risk_factors": factors,

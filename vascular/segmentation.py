@@ -28,6 +28,7 @@ from vascular.unet_model import UNet, infer_full_image
 from vascular.overlay import side_by_side
 from fundus.roi_extractor import compute_fov_mask
 from fundus.color_balance import gray_world_balance, remove_reflections
+from fundus.storage import load_image
 
 DEFAULT_MODEL = "models/unet_drive.pth"
 DEFAULT_OUTPUT = "masks/"
@@ -80,7 +81,7 @@ def main():
         print("[INFO] Entrenalo primero con: python vascular/unet_model.py --train")
         sys.exit(1)
 
-    image = cv2.imread(str(input_path))
+    image = load_image(input_path)
     if image is None:
         print(f"[ERROR] No se pudo leer la imagen: {input_path}")
         sys.exit(1)

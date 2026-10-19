@@ -95,6 +95,7 @@ pip3 install \
     matplotlib \
     tqdm \
     PyYAML \
+    pydicom \
     --quiet
 ok "Dependencias auxiliares instaladas"
 

@@ -9,6 +9,7 @@ opencv-python>=4.8.0
 # ─── Visión e IA ──────────────────────────────────────────
 Pillow>=9.0.0              # Manipulación de imágenes
 scikit-image>=0.19.0       # Procesamiento retinal (commit 8)
+pydicom>=3.0.0             # Lectura de imágenes DICOM
 
 # ─── Deep Learning (commits 9–10) ─────────────────────────
 # Usar torch precompilado para JetPack — ver install.sh

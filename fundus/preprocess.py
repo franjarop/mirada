@@ -4,6 +4,7 @@ Mejora contraste (CLAHE), elimina reflejos y detecta disco óptico / mácula.
 
 Uso — una sola imagen:
   python fundus/preprocess.py --input fundus_images/fundus_L_001.png --show
+  python fundus/preprocess.py --input retinografia.dcm --show   (también acepta DICOM)
 
 Uso — todas las imágenes de una carpeta (dataset o sesión completa):
   python fundus/preprocess.py --batch fundus_images/ --output fundus_processed/
@@ -20,9 +21,10 @@ from fundus.color_balance import (normalize_green_channel, gray_world_balance,
 from fundus.roi_extractor import (compute_fov_mask, detect_optic_disc, detect_macula, draw_roi,
                                    estimate_disc_radius)
 from fundus.disc_hybrid import detect_optic_disc_hybrid
+from fundus.storage import load_image, DICOM_EXTS
 
 
-EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
+EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff") + DICOM_EXTS
 
 
 def parse_args():
@@ -104,7 +106,7 @@ def show_windows(result: dict, win_size=WIN_SIZE):
 
 
 def process_one(path: Path, output_dir: Path, show: bool, save: bool, win_size=WIN_SIZE) -> bool:
-    frame = cv2.imread(str(path))
+    frame = load_image(path)
     if frame is None:
         print(f"[WARN] No se pudo leer: {path}")
         return False
@@ -167,7 +169,8 @@ def main():
             if process_one(f, output_dir, args.show, args.save, tuple(args.win_size)):
                 ok += 1
 
-        print(f"\n[OK] {ok}/{len(files)} imágenes procesadas. Guardadas en {output_dir}")
+        saved = f"Guardadas en {output_dir}" if args.save else "No guardadas (falta --save)"
+        print(f"\n[OK] {ok}/{len(files)} imágenes procesadas. {saved}")
 
 
 if __name__ == "__main__":
